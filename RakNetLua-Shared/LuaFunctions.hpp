@@ -1,4 +1,26 @@
-//Types over network
+#pragma comment(linker, \
+  "\"/manifestdependency:type='Win32' "\
+  "name='Microsoft.Windows.Common-Controls' "\
+  "version='6.0.0.0' "\
+  "processorArchitecture='*' "\
+  "publicKeyToken='6595b64144ccf1df' "\
+  "language='*'\"")
+
+FILE *f;
+char szCmd[256];
+char m_pBuffer[1024];
+time_t rawtime;
+char szTimestamp[28];
+int pRemoteFn[512];
+RakNet::RakPeerInterface *peer;
+bool isServer;
+RakNet::Packet *packet;
+char iIP[125];
+HANDLE RakThreadHandle;
+bool isExecutable;
+RakNet::TCPInterface *tcp;
+char szWebResponse[9999];
+
 enum NETWORK_TYPES {
 	TBOOL = 0,
 	TUINT8,
@@ -13,54 +35,122 @@ enum NETWORK_TYPES {
 	TSTRING
 };
 
-int pRemoteFn[512];
+int m_printf(char *fmt, ...)
+{
+	int ret;
+	va_list myargs;
+	va_start(myargs, fmt);
+	ret = vsprintf(m_pBuffer, fmt, myargs);
+	printf("%s\n",m_pBuffer);
+	if (f != NULL) {
+		time(&rawtime);
+		struct tm  *timeinfo = localtime(&rawtime);
+		strftime(szTimestamp, sizeof(szTimestamp) - 1, "%d/%m/%y %H:%M:%S", timeinfo);
+		fprintf(f, "%s # %s\n", szTimestamp, m_pBuffer);
+	}
+	va_end(myargs);
+	return ret;
+}
 
-RakNet::RakPeerInterface *peer;
-bool isServer;
-RakNet::Packet *packet;
-char iIP[125];
-HANDLE RakThreadHandle;
-bool isExecutable;
-
-void RakThread(void * lp)
+DWORD RakThread(void * lp)
 {
 	lua_State* L = (lua_State*)lp;
 	do{
-		for (packet = peer->Receive(); packet; peer->DeallocatePacket(packet), packet = peer->Receive())
-		{
-			if (pRemoteFn[packet->data[0]] != NULL) {
-				//lua_getglobal(L, "NetProcess");
-				lua_rawgeti(L, LUA_REGISTRYINDEX, pRemoteFn[packet->data[0]]);
-				lua_pushnumber(L, packet->data[0]);
-				lua_gettable(L, -2);
-				lua_remove(L, -2);
-				if (lua_isfunction(L, -1))
-				{
-					if (isServer)
-						lua_pushinteger(L, packet->systemAddress.systemIndex + 1);
-					RakNet::BitStream stream(packet->data, packet->length, false);
-					stream.IgnoreBytes(sizeof(RakNet::MessageID));
-					lua_pushlightuserdata(L, &stream);
-					if (lua_pcall(L, 2, 0, 0) != 0)
+		if (peer != NULL) {
+			for (packet = peer->Receive(); packet; peer->DeallocatePacket(packet), packet = peer->Receive()) {
+				if (pRemoteFn[packet->data[0]] != NULL) {
+					lua_rawgeti(L, LUA_REGISTRYINDEX, pRemoteFn[packet->data[0]]);
+					if (lua_isfunction(L, -1))
+					{
+						if (isServer)
+							lua_pushinteger(L, packet->systemAddress.systemIndex + 1);
+						RakNet::BitStream stream(packet->data, packet->length, false);
+						stream.IgnoreBytes(sizeof(RakNet::MessageID));
+						lua_pushlightuserdata(L, &stream);
+						if (isServer) {
+							if (lua_pcall(L, 2, 0, 0) != 0)
+								m_printf("%s", lua_tostring(L, -1));
+						}
+						else {
+							if (lua_pcall(L, 1, 0, 0) != 0)
+								m_printf("%s", lua_tostring(L, -1));
+						}
+					}
+					else
 						lua_remove(L, -1);
 				}
-				else
-					lua_remove(L, -1);
+			}
+		}
+
+		if (tcp != NULL && isServer) {
+			if (tcp->ReceiveHasPackets()) {
+				for (packet = tcp->Receive(); packet; tcp->DeallocatePacket(packet), packet = tcp->Receive()) {
+					lua_getglobal(L, "onHTTP");
+					if (lua_isfunction(L, -1))
+					{
+						lua_pushstring(L, (const char*)packet->data);
+						lua_pushstring(L, (const char*)packet->systemAddress.ToString(false));
+						if (lua_pcall(L, 2, 1, 0) != 0) {
+							m_printf("%s", lua_tostring(L, -1));
+						}
+						else {
+							const char* szResp = lua_tostring(L, -1);
+							sprintf(szWebResponse, "HTTP/1.0 200 OK\nServer: RakNetLua_by_Pabloko\nConnection: close\nContent-Type: text/html; charset = UTF-8\nContent-Length: %d\n\n%s", strlen(szResp), szResp);
+							tcp->Send(szWebResponse, strlen(szWebResponse), packet->systemAddress, false);
+						}
+					}
+					else
+						lua_remove(L, -1);
+				}
+			}
+		}
+		if (isExecutable) {
+			int ch;
+			while (_kbhit())
+			{
+				ch = _getch();
+				if (ch == 0x0D) {
+					printf("\n");
+					//m_printf("%s", szCmd);
+					lua_getglobal(L, "onCmd");
+					if (lua_isfunction(L, -1))
+					{
+						lua_pushstring(L, szCmd);
+						if (lua_pcall(L, 1, 0, 0) != 0)
+							m_printf("%s", lua_tostring(L, -1));
+					}
+					else
+						lua_remove(L, -1);
+					sprintf(szCmd, "");
+				}
+				else {
+					printf("%c", ch);
+					sprintf(szCmd, "%s%c", szCmd, ch);
+				}
 			}
 		}
 		Sleep(5);
 	} while (true);
+	return 0;
+}
+
+void Disconnect() {
+	if (peer != NULL) {
+		if (isServer) {
+			tcp->Stop();
+			RakNet::TCPInterface::DestroyInstance(tcp);
+			tcp = NULL;
+		}
+		TerminateThread(RakThreadHandle, 0);
+		peer->Shutdown(100);
+		RakNet::RakPeerInterface::DestroyInstance(peer);
+		peer = NULL;
+	}
 }
 
 int lua_openclient(lua_State* L)
 {
-	if (peer != NULL)
-	{
-		if (!isExecutable)
-			TerminateThread(RakThreadHandle, 0);
-		peer->Shutdown(100);
-		RakNet::RakPeerInterface::DestroyInstance(peer);
-	}
+	Disconnect();
 	peer = RakNet::RakPeerInterface::GetInstance();
 	const char * ip = luaL_checkstring(L, 1);
 	int port = luaL_checknumber(L, 2);
@@ -72,20 +162,14 @@ int lua_openclient(lua_State* L)
 	peer->Connect(iIP, port, passwd, (int)strlen(passwd));
 	peer->SetOccasionalPing(true);
 	peer->SetUnreliableTimeout(500);
-	if (!isExecutable)
-		RakThreadHandle = CreateThread(0, 0, (LPTHREAD_START_ROUTINE)RakThread, (void *)L, 0, 0);
+	RakThreadHandle = CreateThread(0, 0, (LPTHREAD_START_ROUTINE)RakThread, (void *)L, 0, 0);
 	return 0;
 }
 
 int lua_openserver(lua_State* L)
 {
-	if (peer != NULL)
-	{
-		if (!isExecutable)
-			TerminateThread(RakThreadHandle, 0);
-		peer->Shutdown(100);
-		RakNet::RakPeerInterface::DestroyInstance(peer);
-	}
+	Disconnect();
+	tcp = RakNet::TCPInterface::GetInstance();
 	peer = RakNet::RakPeerInterface::GetInstance();
 	int port = luaL_checknumber(L, 1);
 	int max = luaL_checknumber(L, 2);
@@ -97,29 +181,25 @@ int lua_openserver(lua_State* L)
 	peer->SetMaximumIncomingConnections(max);
 	peer->SetUnreliableTimeout(500);
 	peer->SetOccasionalPing(true);
-	if (!isExecutable)
+	tcp->Start(port, max);
 	RakThreadHandle = CreateThread(0, 0, (LPTHREAD_START_ROUTINE)RakThread, (void *)L, 0, 0);
 	return 0;
 }
 
 int lua_disconnect(lua_State* L)
 {
-	if (!isExecutable)
-		TerminateThread(RakThreadHandle, 0);
-	peer->Shutdown(100);
-	RakNet::RakPeerInterface::DestroyInstance(peer);
+	Disconnect();
 	return 0;
 }
 
 int lua_NetSuscribe(lua_State* L)
 {
-	int iDx = luaL_checknumber(L, 1);
+	int iDx = lua_tonumber(L, 1);
+	lua_CFunction m_pcFn = lua_tocfunction(L, 2);
 	pRemoteFn[iDx] = luaL_ref(L, LUA_REGISTRYINDEX);
 	return 0;
 }
 
-
-//Send a packet to some player
 static int NetSend(lua_State* L)
 {
 	RakNet::BitStream *stream = static_cast<RakNet::BitStream*>(lua_touserdata(L, 1));
@@ -130,7 +210,6 @@ static int NetSend(lua_State* L)
 	return 0;
 }
 
-//Create packet with packet id
 static int NetCreateBitStream(lua_State* L)
 {
 	RakNet::BitStream *stream = new RakNet::BitStream();
@@ -140,7 +219,6 @@ static int NetCreateBitStream(lua_State* L)
 	return 1;
 }
 
-//Write to a bitstream
 static int NetWriteBitStream(lua_State* L)
 {
 	RakNet::BitStream *stream = static_cast<RakNet::BitStream*>(lua_touserdata(L, 1));
@@ -207,7 +285,6 @@ static int NetWriteBitStream(lua_State* L)
 	return 0;
 }
 
-//read from a bitstream
 static int NetReadBitStream(lua_State* L)
 {
 	RakNet::BitStream *stream = static_cast<RakNet::BitStream*>(lua_touserdata(L, 1));
@@ -273,7 +350,6 @@ static int NetReadBitStream(lua_State* L)
 	return 1;
 }
 
-//kick a faggot
 static int Kick(lua_State* L)
 {
 	if (isServer) {
@@ -283,7 +359,6 @@ static int Kick(lua_State* L)
 	return 0;
 }
 
-//banhammer them all
 static int Ban(lua_State* L)
 {
 	if (isServer) {
@@ -316,7 +391,6 @@ static int lua_getusernetwork(lua_State* L)
 
 void RegisterTypes(lua_State* L)
 {
-	//Define TYPES on LUA
 	lua_pushnumber(L, NETWORK_TYPES::TBOOL);
 	lua_setglobal(L, "TBOOL");
 	lua_pushnumber(L, NETWORK_TYPES::TUINT8);
