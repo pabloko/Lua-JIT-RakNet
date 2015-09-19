@@ -22,7 +22,7 @@ RakNet::TCPInterface *tcp;
 char szWebResponse[9999];
 
 enum NETWORK_TYPES {
-	TBOOL = 0,
+	TBOOL = 1,
 	TUINT8,
 	TINT8,
 	TUINT16,
@@ -195,7 +195,6 @@ int lua_disconnect(lua_State* L)
 int lua_NetSuscribe(lua_State* L)
 {
 	int iDx = lua_tonumber(L, 1);
-	lua_CFunction m_pcFn = lua_tocfunction(L, 2);
 	pRemoteFn[iDx] = luaL_ref(L, LUA_REGISTRYINDEX);
 	return 0;
 }
@@ -206,7 +205,7 @@ static int NetSend(lua_State* L)
 	if (isServer)
 		peer->Send(stream, HIGH_PRIORITY, RELIABLE_ORDERED, 0, peer->GetSystemAddressFromIndex(lua_tonumber(L, 2) - 1), false);
 	else
-		peer->Send(stream, HIGH_PRIORITY, RELIABLE_ORDERED, 0, 0, false);
+		peer->Send(stream, HIGH_PRIORITY, RELIABLE_ORDERED, 0, peer->GetSystemAddressFromIndex(0), false);
 	return 0;
 }
 
