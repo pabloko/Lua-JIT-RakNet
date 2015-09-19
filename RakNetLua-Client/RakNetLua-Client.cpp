@@ -24,6 +24,7 @@ int luaopen_RakNetLua(lua_State* L)
 		{ "Disconnect", lua_disconnect },
 		{ "Suscribe", lua_NetSuscribe },
 		{ "Send", NetSend },
+		{ "Update", lua_NetUpdate },
 		{ "Ban", Ban },
 		{ "Kick", Kick },
 		{ "GetUserNetwork", lua_getusernetwork },
@@ -37,5 +38,5 @@ int luaopen_RakNetLua(lua_State* L)
 	};
 	luaL_openlib(L, "RakNet", tab_funcs_raknet, NULL);
 	luaL_openlib(L, "BitStream", tab_funcs_bitstream, NULL);
-	return -1;
+	return 1;
 }

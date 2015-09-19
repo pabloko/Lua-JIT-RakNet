@@ -40,6 +40,7 @@ int _tmain(int argc, _TCHAR* argv[])
 		{ "Disconnect", lua_disconnect },
 		{ "Suscribe", lua_NetSuscribe },
 		{ "Send", NetSend },
+		{ "Update", lua_NetUpdate },
 		{ "Ban", Ban },
 		{ "Kick", Kick },
 		{ "GetUserNetwork", lua_getusernetwork },

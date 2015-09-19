@@ -286,10 +286,24 @@ end);
 
 -- Open the server  =================================================>
 
--- PORT, MAX_CONNECTIONS, PASSWORD
-RakNet.OpenServer(1337, 500, "")
+-- PORT, MAX_CONNECTIONS, PASSWORD, MULTITHREADED|SINGLETHREADED (single will need Update calls)
+RakNet.OpenServer(1337, 500, "", SINGLETHREADED)
 
 -- Helper functions =================================================>
+
+local ffi = require("ffi")
+ffi.cdef[[
+int MessageBoxA(void *w, const char *txt, const char *cap, int type);
+void Sleep(int ms);
+]]
+
+Sleep = function(ms)
+	ffi.C.Sleep(ms)
+end
+
+MessageBox = function(title, text)
+	ffi.C.MessageBoxA(nil, text, title, 0)
+end
 
 function Broadcast(sText, To)
 	local bsOut = BitStream.Create(ID_ADVERTISE)
@@ -315,5 +329,8 @@ end
 
 -- Main =============================================================>
 
+MessageBox("server","Starting...")
 while (true) do
+	RakNet.Update()
+	Sleep(20)
 end

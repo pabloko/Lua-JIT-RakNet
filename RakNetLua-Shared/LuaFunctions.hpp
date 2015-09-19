@@ -20,6 +20,7 @@ HANDLE RakThreadHandle;
 bool isExecutable;
 RakNet::TCPInterface *tcp;
 char szWebResponse[9999];
+bool bSingleThreaded;
 
 enum NETWORK_TYPES {
 	TBOOL = 1,
@@ -52,85 +53,97 @@ int m_printf(char *fmt, ...)
 	return ret;
 }
 
+void NetworkUpdate(lua_State* L)
+{
+	if (peer != NULL) {
+		for (packet = peer->Receive(); packet; peer->DeallocatePacket(packet), packet = peer->Receive()) {
+			if (pRemoteFn[packet->data[0]] != NULL) {
+				lua_rawgeti(L, LUA_REGISTRYINDEX, pRemoteFn[packet->data[0]]);
+				if (lua_isfunction(L, -1))
+				{
+					if (isServer)
+						lua_pushinteger(L, packet->systemAddress.systemIndex + 1);
+					RakNet::BitStream stream(packet->data, packet->length, false);
+					stream.IgnoreBytes(sizeof(RakNet::MessageID));
+					lua_pushlightuserdata(L, &stream);
+					if (isServer) {
+						if (lua_pcall(L, 2, 0, 0) != 0)
+							m_printf("%s", lua_tostring(L, -1));
+					}
+					else {
+						if (lua_pcall(L, 1, 0, 0) != 0)
+							m_printf("%s", lua_tostring(L, -1));
+					}
+				}
+				else
+					lua_remove(L, -1);
+			}
+		}
+	}
+
+	if (tcp != NULL && isServer) {
+		if (tcp->ReceiveHasPackets()) {
+			for (packet = tcp->Receive(); packet; tcp->DeallocatePacket(packet), packet = tcp->Receive()) {
+				lua_getglobal(L, "onHTTP");
+				if (lua_isfunction(L, -1))
+				{
+					lua_pushstring(L, (const char*)packet->data);
+					lua_pushstring(L, (const char*)packet->systemAddress.ToString(false));
+					if (lua_pcall(L, 2, 1, 0) != 0) {
+						m_printf("%s", lua_tostring(L, -1));
+					}
+					else {
+						const char* szResp = lua_tostring(L, -1);
+						sprintf(szWebResponse, "HTTP/1.0 200 OK\nServer: RakNetLua_by_Pabloko\nConnection: close\nContent-Type: text/html; charset = UTF-8\nContent-Length: %d\n\n%s", strlen(szResp), szResp);
+						tcp->Send(szWebResponse, strlen(szWebResponse), packet->systemAddress, false);
+					}
+				}
+				else
+					lua_remove(L, -1);
+			}
+		}
+	}
+
+	if (isExecutable) {
+		int ch;
+		while (_kbhit())
+		{
+			ch = _getch();
+			if (ch == 0x0D) {
+				printf("\n");
+				//m_printf("%s", szCmd);
+				lua_getglobal(L, "onCmd");
+				if (lua_isfunction(L, -1))
+				{
+					lua_pushstring(L, szCmd);
+					if (lua_pcall(L, 1, 0, 0) != 0)
+						m_printf("%s", lua_tostring(L, -1));
+				}
+				else
+					lua_remove(L, -1);
+				sprintf(szCmd, "");
+			}
+			else {
+				printf("%c", ch);
+				sprintf(szCmd, "%s%c", szCmd, ch);
+			}
+		}
+	}
+}
+
 DWORD RakThread(void * lp)
 {
 	lua_State* L = (lua_State*)lp;
 	do{
-		if (peer != NULL) {
-			for (packet = peer->Receive(); packet; peer->DeallocatePacket(packet), packet = peer->Receive()) {
-				if (pRemoteFn[packet->data[0]] != NULL) {
-					lua_rawgeti(L, LUA_REGISTRYINDEX, pRemoteFn[packet->data[0]]);
-					if (lua_isfunction(L, -1))
-					{
-						if (isServer)
-							lua_pushinteger(L, packet->systemAddress.systemIndex + 1);
-						RakNet::BitStream stream(packet->data, packet->length, false);
-						stream.IgnoreBytes(sizeof(RakNet::MessageID));
-						lua_pushlightuserdata(L, &stream);
-						if (isServer) {
-							if (lua_pcall(L, 2, 0, 0) != 0)
-								m_printf("%s", lua_tostring(L, -1));
-						}
-						else {
-							if (lua_pcall(L, 1, 0, 0) != 0)
-								m_printf("%s", lua_tostring(L, -1));
-						}
-					}
-					else
-						lua_remove(L, -1);
-				}
-			}
-		}
-
-		if (tcp != NULL && isServer) {
-			if (tcp->ReceiveHasPackets()) {
-				for (packet = tcp->Receive(); packet; tcp->DeallocatePacket(packet), packet = tcp->Receive()) {
-					lua_getglobal(L, "onHTTP");
-					if (lua_isfunction(L, -1))
-					{
-						lua_pushstring(L, (const char*)packet->data);
-						lua_pushstring(L, (const char*)packet->systemAddress.ToString(false));
-						if (lua_pcall(L, 2, 1, 0) != 0) {
-							m_printf("%s", lua_tostring(L, -1));
-						}
-						else {
-							const char* szResp = lua_tostring(L, -1);
-							sprintf(szWebResponse, "HTTP/1.0 200 OK\nServer: RakNetLua_by_Pabloko\nConnection: close\nContent-Type: text/html; charset = UTF-8\nContent-Length: %d\n\n%s", strlen(szResp), szResp);
-							tcp->Send(szWebResponse, strlen(szWebResponse), packet->systemAddress, false);
-						}
-					}
-					else
-						lua_remove(L, -1);
-				}
-			}
-		}
-		if (isExecutable) {
-			int ch;
-			while (_kbhit())
-			{
-				ch = _getch();
-				if (ch == 0x0D) {
-					printf("\n");
-					//m_printf("%s", szCmd);
-					lua_getglobal(L, "onCmd");
-					if (lua_isfunction(L, -1))
-					{
-						lua_pushstring(L, szCmd);
-						if (lua_pcall(L, 1, 0, 0) != 0)
-							m_printf("%s", lua_tostring(L, -1));
-					}
-					else
-						lua_remove(L, -1);
-					sprintf(szCmd, "");
-				}
-				else {
-					printf("%c", ch);
-					sprintf(szCmd, "%s%c", szCmd, ch);
-				}
-			}
-		}
+		NetworkUpdate(L);
 		Sleep(5);
 	} while (true);
+	return 0;
+}
+
+int lua_NetUpdate(lua_State* L)
+{
+	NetworkUpdate(L);
 	return 0;
 }
 
@@ -141,7 +154,8 @@ void Disconnect() {
 			RakNet::TCPInterface::DestroyInstance(tcp);
 			tcp = NULL;
 		}
-		TerminateThread(RakThreadHandle, 0);
+		if (!bSingleThreaded)
+			TerminateThread(RakThreadHandle, 0);
 		peer->Shutdown(100);
 		RakNet::RakPeerInterface::DestroyInstance(peer);
 		peer = NULL;
@@ -162,7 +176,9 @@ int lua_openclient(lua_State* L)
 	peer->Connect(iIP, port, passwd, (int)strlen(passwd));
 	peer->SetOccasionalPing(true);
 	peer->SetUnreliableTimeout(500);
-	RakThreadHandle = CreateThread(0, 0, (LPTHREAD_START_ROUTINE)RakThread, (void *)L, 0, 0);
+	bSingleThreaded = lua_toboolean(L, 4);
+	if (!bSingleThreaded)
+		RakThreadHandle = CreateThread(0, 0, (LPTHREAD_START_ROUTINE)RakThread, (void *)L, 0, 0);
 	return 0;
 }
 
@@ -182,7 +198,9 @@ int lua_openserver(lua_State* L)
 	peer->SetUnreliableTimeout(500);
 	peer->SetOccasionalPing(true);
 	tcp->Start(port, max);
-	RakThreadHandle = CreateThread(0, 0, (LPTHREAD_START_ROUTINE)RakThread, (void *)L, 0, 0);
+	bSingleThreaded = lua_toboolean(L, 4);
+	if (!bSingleThreaded)
+		RakThreadHandle = CreateThread(0, 0, (LPTHREAD_START_ROUTINE)RakThread, (void *)L, 0, 0);
 	return 0;
 }
 
@@ -412,4 +430,8 @@ void RegisterTypes(lua_State* L)
 	lua_setglobal(L, "TLONG");
 	lua_pushnumber(L, NETWORK_TYPES::TSTRING);
 	lua_setglobal(L, "TSTRING");
+	lua_pushboolean(L, FALSE);
+	lua_setglobal(L, "MULTITHREADED");
+	lua_pushboolean(L, TRUE);
+	lua_setglobal(L, "SINGLETHREADED");
 }
